@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+#![allow(unused)]
+use std::path::{Path, PathBuf};
 
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
@@ -11,7 +12,7 @@ pub struct Gdb {
 }
 
 impl Gdb {
-    pub async  fn try_new(
+    pub async fn try_new(
         executive_path: PathBuf,
         target_elf_path: PathBuf,
         server: String,
@@ -71,10 +72,14 @@ impl Gdb {
         let _ = timeout(await_timeout, async {
             let mut line_buffer = String::new();
             while let Ok(line_len) = self.stdout_reader.read_line(&mut line_buffer).await {
-                if line_len > 0 {
-                    log::debug!("- chars={line_len}, response='{line_buffer}',");
-                    response.push(line_buffer.trim().to_string());
+                if line_len == 0 {
+                        log::warn!("GDB process might have exited unexpectedly!");
+                        break; // Exit loop if GDB is no longer providing output
                 }
+                let trimmed_line = line_buffer.trim();
+                log::debug!("- chars={line_len}, response='{trimmed_line}',");
+                response.push(trimmed_line.to_string());
+                
                 line_buffer.clear();
             }
         })
@@ -112,7 +117,83 @@ impl Gdb {
             Duration::from_millis(250)
         ).await
     }
+
+    pub async fn monitor_halt(&mut self) -> Result<Vec<String>, io::Error> {
+        self.make_request_await_response(
+            "monitor halt", 
+            Duration::from_millis(250)
+        ).await
+    }
+
+    pub async fn continue_execution(&mut self) -> Result<Vec<String>, io::Error> {
+        self.make_request_await_response(
+            "continue", 
+            Duration::from_millis(250) // TODO not sure if it will give some output
+        ).await
+    }
+
+    pub async fn monitor_reset(&mut self) -> Result<Vec<String>, io::Error> {
+        self.make_request_await_response(
+            "monitor reset", 
+            Duration::from_millis(250)
+        ).await
+    }
+
+    pub async fn call(&mut self, function_name: &str) -> Result<Vec<String>, io::Error> {
+        self.make_request_await_response(
+            format!("call {function_name}()").as_str(), 
+            Duration::from_millis(250)
+        ).await
+    }
+
+    pub async fn break_at(&mut self, function_name: &str) -> Result<Vec<String>, io::Error> {
+        self.make_request_await_response(
+            format!("break {function_name}").as_str(), 
+            Duration::from_millis(250)
+        ).await
+    }
+
+    pub async fn monitor_sleep(&mut self, millis: u32) -> Result<Vec<String>, io::Error> {
+        self.make_request_await_response(
+            format!("monitor sleep {millis}").as_str(), 
+            Duration::from_millis(millis as u64 + 250)
+        ).await
+    }
+
+    pub async fn write_binary_file_to_mem<P>(&mut self, start_address: u32, binary_filepath: P) -> Result<Vec<String>, io::Error> 
+    where 
+        P: AsRef<Path>
+    {
+        self.make_request_await_response(
+            format!(
+                "restore {} binary {:#x}", 
+                binary_filepath.as_ref().to_str().unwrap(), 
+                start_address
+        ).as_str(),
+            Duration::from_millis(1000)
+        ).await
+    }
+
+    pub async fn read_binary_file_from_mem<P>(&mut self, start_address: u32, end_address: u32, result_filepath: P) -> Result<Vec<String>, io::Error> 
+    where 
+        P: AsRef<Path>
+    {
+        // gdb will create file
+        self.make_request_await_response(
+            format!(
+                "dump binary memory {} {:#x} {:#x}",
+                result_filepath.as_ref().to_str().unwrap(), 
+                start_address, 
+                end_address
+            )
+            .as_str(),
+            Duration::from_millis(1000)
+        ).await
+    }
+
+
 }
+
 
 // impl Drop for Gdb {
 //     fn drop(&mut self) {
