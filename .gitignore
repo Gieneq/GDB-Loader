@@ -1,2 +1,4 @@
 /target
 .env
+tmp_bin_chunks
+res/testresults

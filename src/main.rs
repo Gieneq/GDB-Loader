@@ -1,28 +1,21 @@
 mod gdb;
+mod loader;
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use gdb::Gdb;
+use loader::upload_binary_file_to_external_flash;
 
+// TODO replace with CLI params or config file
 const ELF_ABS_PATH: &str = "C:/WS/STM32U5_CMake_DevContainer_TouchGFX_Template/target/build/tmplatemkfileu5dk.elf";
+// arm-none-eabi-gdb -q C:/WS/STM32U5_CMake_DevContainer_TouchGFX_Template/target/build/tmplatemkfileu5dk.elf
+const BIN_PATH: &str = "C:/WS/gdbloader/res/testfiles/images.bin";
 const GDB_EXEC: &str = "arm-none-eabi-gdb";
 const GDB_SERVER: &str = "localhost:61234"; //"host.docker.internal:61234"
-
-/// Copy file in chunks first to RAM, then trigger
-/// function to copy from RAM to external FLASH.
-/// 
-/// Consider erasing from GDB or using coping function. Probably best
-/// option: erase 4k blocks right before coping data.
-async fn upload_binary_file_to_external_flash<P>(
-    binary_filepath: P,
-    chunk_size: u32,
-    ram_start_address: u32,
-    flash_start_address: u32,
-    flash_block_size: u32,
-    coping_function_namy: &str,
-) {
-    unimplemented!()
-}
+// target remote localhost:61234
+// restore C:/WS/gdbloader/res/testfiles/images.bin binary loader_ram_buffer
+// restore C:/WS/gdbloader/res/testfiles/images.bin binary &loader_ram_buffer
+// restore C:/WS/gdbloader/res/testfiles/images.bin binary 0x200b76a8
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -32,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         GDB_SERVER.to_string()
     ).await?;
 
-    gdb.help().await?;
+    // gdb.help().await?;
 
     gdb.monitor_reset().await?;
 
@@ -42,10 +35,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     gdb.monitor_halt().await?;
 
-    for _ in 0..5 {
-        gdb.call("green_togl").await?;
+    upload_binary_file_to_external_flash(
+        &mut gdb,
+        BIN_PATH, 
+        "loader_ram_buffer", 
+        4096, 
+        0x0, 
+        4096, 
+        "loader_checksum",
+        "loader_copy_to_ext_flash"
+    ).await?;
 
-        gdb.monitor_sleep(500).await?;
+    for _ in 0..3 {
+        gdb.call("green_togl").await?;
+        gdb.monitor_sleep(250).await?;
     }
  
     gdb.quit().await?; // TODO implement drop
