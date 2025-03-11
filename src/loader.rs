@@ -62,17 +62,16 @@ pub async fn upload_binary_file_to_external_flash<P>(
     ram_buffer_name: &str,
     chunk_size: usize,
     flash_start_offset: usize,
-    _flash_block_size: usize,
-    checksum_variable_name: &str,
+    _checksum_variable_name: &str,
     coping_function_namy: &str,
 ) -> io::Result<()> 
 where
     P: AsRef<Path> + Debug
 {
     let file_data = fs::read(&binary_filepath).await?;
-    let packets_count = (file_data.len() / chunk_size) + if file_data.len() % chunk_size != 0 { 1 } else { 0 };
+    let chunks_count = (file_data.len() / chunk_size) + if file_data.len() % chunk_size != 0 { 1 } else { 0 };
     log::info!("Loaded file {:?}, got {} B. Packets to upload: {} up to {} B each.", 
-        binary_filepath, file_data.len(), packets_count, chunk_size
+        binary_filepath, file_data.len(), chunks_count, chunk_size
     );
 
     // Create or recreate temp files directory
@@ -88,6 +87,7 @@ where
     while remaining_bytes > 0 {
         // Prepare chunk
         let chunk_bytes = if remaining_bytes > chunk_size { chunk_size } else { remaining_bytes };
+        log::info!("Preparing chunk_idx={chunk_idx}/{chunks_count}, chunk_size={chunk_bytes} B, remaining={remaining_bytes} B.");
 
         let data_slice_start = data_offset;
         let data_slice_end = data_slice_start + chunk_bytes;
@@ -107,10 +107,17 @@ where
         log::info!("Got RAM writing results: {result:?}");
 
         // Copy to Ext FLASH
-        let _ = gdb.call_with_u32(coping_function_namy, chunk_bytes as u32).await?;
+        let target_checksum = gdb.call_with_u32_u32_resulting_u32(
+            coping_function_namy, 
+            flash_offset as u32, 
+            chunk_bytes as u32,
+            true        
+        ).await?;
 
-        let target_checksum = gdb.read_variable_u32(checksum_variable_name).await?;
-        log::info!("Got target_checksum: {target_checksum}");
+        // let target_checksum = gdb.read_variable_u32(checksum_variable_name).await?;
+        log::info!("Got target_checksum={target_checksum}, host_checksum={data_slice_checksum}, matches={}", 
+            target_checksum == data_slice_checksum
+        );
 
         // Compare checksums
         if data_slice_checksum != target_checksum {

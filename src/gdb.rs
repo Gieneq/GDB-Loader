@@ -1,13 +1,14 @@
-#![allow(unused)]
+// #![allow(unused)]
 use std::path::{Path, PathBuf};
 use regex::Regex;
 
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::select;
 use tokio::time::{timeout, Duration};
 
 pub struct Gdb {
-    gdb_subprocess: Child,
+    _gdb_subprocess: Child,
     stdout_reader: BufReader<ChildStdout>,
     stderr_reader: BufReader<ChildStderr>,
     stdin_writer: BufWriter<ChildStdin>,
@@ -47,162 +48,229 @@ impl Gdb {
         let stdin_writer = BufWriter::new(stdin);
 
         let mut gdb = Self {
-            gdb_subprocess: gdb_subcommand,
+            _gdb_subprocess: gdb_subcommand,
             stdout_reader,
             stderr_reader,
             stdin_writer
         };
 
-        let _ = gdb.await_response(Duration::from_secs(1)).await;
+        // Make no return request
+        gdb.make_request("set confirm off").await?;
 
+        // Clear all pending responses
+        let _ = gdb.await_responses(None, Duration::from_millis(250)).await;
+
+        // Connect, can take a while
         let _ = gdb.make_request_await_response(
             format!("target remote {server}").as_str(),
+            None,
             Duration::from_millis(500)
-        ).await?;
-        
-        let _ = gdb.make_request_await_response(
-            "set confirm off",
-            Duration::from_millis(100)
         ).await?;
 
         Ok(gdb)
     }
 
+    /// Write command to GDB
     pub async fn make_request(&mut self, cmd: &str) -> io::Result<()> {
         log::debug!("Requesting cmd='{cmd}'...");
         self.stdin_writer.write_all(format!("{}\n", cmd).as_bytes()).await?;
         self.stdin_writer.flush().await
     }
 
-    async fn await_response(&mut self, await_timeout: Duration) -> Vec<String> {
+    /// Collect until await time reached or excepcted count succeeded
+    async fn await_responses(&mut self, expected_count: Option<usize>, await_timeout: Duration) -> Vec<String> {
         // Collect all responses until timeout
-        let mut response = Vec::new();
-
-        // Those should be somehow combined
-        let _ = timeout(await_timeout, async {
-            let mut line_buffer = String::new();
-            while let Ok(line_len) = self.stdout_reader.read_line(&mut line_buffer).await {
-                if line_len == 0 {
-                        log::warn!("GDB process might have exited unexpectedly!");
-                        break; // Exit loop if GDB is no longer providing output
-                }
-                let trimmed_line = line_buffer.trim();
-                log::debug!("- chars={line_len}, response_out='{trimmed_line}',");
-                response.push(trimmed_line.to_string());
-                
-                line_buffer.clear();
-            }
-        })
-        .await.is_ok();
+        let mut responses = Vec::new();
 
         let _ = timeout(await_timeout, async {
-            let mut line_buffer = String::new();
-            while let Ok(line_len) = self.stderr_reader.read_line(&mut line_buffer).await {
-                if line_len == 0 {
-                        log::warn!("GDB process might have exited unexpectedly!");
-                        break; // Exit loop if GDB is no longer providing output
+
+            loop {
+                let mut line_stdout_buffer = String::new();
+                let mut line_stderr_buffer = String::new();
+
+                select! {
+                    stdout_result = self.stdout_reader.read_line(&mut line_stdout_buffer) => {
+                        match stdout_result {
+                            Ok(0) => {
+                                log::warn!("GDB process stdout closed unexpectedly!");
+                                break;
+                            },
+                            Ok(_) => {
+                                let trimmed_line = line_stdout_buffer.trim().to_string();
+                                log::debug!("STDOUT: {trimmed_line}");
+                                responses.push(trimmed_line);
+                                line_stdout_buffer.clear();
+                            },
+                            Err(e) => {
+                                log::error!("Error reading stdout: {e}");
+                                break;
+                            }
+                        }
+                    },
+
+                    stderr_result = self.stderr_reader.read_line(&mut line_stderr_buffer) => {
+                        match stderr_result {
+                            Ok(0) => {
+                                log::warn!("GDB process stdout closed unexpectedly!");
+                                break;
+                            },
+                            Ok(_) => {
+                                let trimmed_line = line_stderr_buffer.trim().to_string();
+                                log::debug!("STDERR: {trimmed_line}");
+                                responses.push(trimmed_line);
+                                line_stderr_buffer.clear();
+                            },
+                            Err(e) => {
+                                log::error!("Error reading stderr: {e}");
+                                break;
+                            }
+                        }
+                    }
                 }
-                let trimmed_line = line_buffer.trim();
-                log::debug!("- chars={line_len}, response_err='{trimmed_line}',");
-                response.push(trimmed_line.to_string());
-                
-                line_buffer.clear();
+
+                // Check if collected enough responses
+                if let Some(expected_responses_count) = expected_count {
+                    if expected_responses_count == responses.len() {
+                        log::info!("Speedup >>>>>>>>>>");
+                        break;
+                    }
+                }
             }
         })
-        .await.is_ok();
+        .await
+        .is_ok();
     
-        log::debug!("Responses: {response:?}");
-        response
+        log::debug!("Responses: {responses:?}");
+        responses
     }
 
     pub async fn make_request_await_response(
         &mut self,
         cmd: &str,
+        expected_count: Option<usize>,
         await_timeout: Duration
     ) -> Result<Vec<String>, io::Error> {
         // Make request
         self.make_request(cmd).await?;
     
-        // Collect all responses until timeout
-        Ok(self.await_response(await_timeout).await)
+        if matches!(expected_count, Some(0)) {
+            // No response expected
+            Ok(vec![])
+        } else {
+            // Collect all responses until timeout
+            Ok(self.await_responses(expected_count, await_timeout).await)
+        }
     }
 
     pub async fn quit(&mut self) -> io::Result<()> {
-        let _ = self.make_request_await_response(
+        self.make_request(
             "quit", 
-            Duration::from_millis(500)
-        ).await?;
-
-        self.gdb_subprocess.wait().await?;
-        log::info!("Subprocesses finished");
-
-        Ok(())
+        ).await
     }
 
+    #[allow(unused)]
     pub async fn help(&mut self) -> Result<Vec<String>, io::Error> {
         self.make_request_await_response(
             "help", 
-            Duration::from_millis(250)
+            None,
+            Duration::from_millis(500)
         ).await
     }
 
     pub async fn monitor_halt(&mut self) -> Result<Vec<String>, io::Error> {
+        // Nothing resulting, maybe because used after hitting breakpoint
         self.make_request_await_response(
             "monitor halt", 
-            Duration::from_millis(750)
+            Some(0),
+            Duration::from_millis(0)
         ).await
     }
 
     pub async fn continue_execution(&mut self) -> Result<Vec<String>, io::Error> {
+        // Several lines returned, one inseide:  - chars=34, response_out='Breakpoint 1, MX_ThreadX_Init ()',
         self.make_request_await_response(
             "continue", 
+            None,
             Duration::from_millis(750) // TODO not sure if it will give some output
         ).await
     }
 
     pub async fn monitor_reset(&mut self) -> Result<Vec<String>, io::Error> {
+        // Dont know why response is in stderr
+        //- chars=19, response_err='Resetting target',
         self.make_request_await_response(
-            "monitor reset", 
+            "monitor reset",
+            Some(1),
             Duration::from_millis(250)
         ).await
     }
 
-    pub async fn call(&mut self, function_name: &str) -> Result<Vec<String>, io::Error> {
-        self.make_request_await_response(
-            format!("call {function_name}()").as_str(), 
+    async fn call_generic(&mut self, function: &str, has_return: bool) -> Result<String, io::Error> {
+        let results = self.make_request_await_response(
+            format!("call {function}").as_str(), 
+            if has_return { Some(1) } else { None },
             Duration::from_millis(250)
-        ).await
+        )
+        .await?;
+
+        extract_call_result(results, has_return)
     }
 
-    pub async fn call_with_u32(&mut self, function_name: &str, arg: u32) -> Result<Vec<String>, io::Error> {
-        self.make_request_await_response(
-            format!("call {function_name}({arg})").as_str(), 
-            Duration::from_millis(250)
-        ).await
+    pub async fn call(&mut self, function_name: &str, has_return: bool) -> Result<String, io::Error> {
+        // Can have return, then it outputs something like this:
+        // chars=15, response_out='$23 = 118 'v''.
+        // If target function has void return type then result empty.
+        self.call_generic(format!("{function_name}()").as_str(), has_return).await
     }
 
+    #[allow(unused)]
+    pub async fn call_with_u32(&mut self, function_name: &str, arg: u32, has_return: bool) -> Result<String, io::Error> {
+        // seems has return if function returns something chars=15, response_out='$23 = 118 'v''
+        self.call_generic(format!("{function_name}({arg})").as_str(), has_return).await
+    }
+
+    pub async fn call_with_u32_u32(&mut self, function_name: &str, arg1: u32, arg2: u32, has_return: bool) -> Result<String, io::Error> {
+        // seems has return if function returns something chars=15, response_out='$23 = 118 'v''
+        self.call_generic(format!("{function_name}({arg1}, {arg2})").as_str(), has_return).await
+    }
+
+    pub async fn call_with_u32_u32_resulting_u32(&mut self, function_name: &str, arg1: u32, arg2: u32, has_return: bool) -> Result<u32, io::Error> {
+        // seems has return if function returns something chars=15, response_out='$23 = 118 'v''
+        let result = self.call_with_u32_u32(function_name, arg1, arg2, has_return)
+            .await?;
+        extract_variable_value_from_response_line(&result)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Read format corrupted"))
+    }
+
+    #[allow(unused)]
     pub async fn read_variable_u32(&mut self, variable_name: &str) -> Result<u32, io::Error> {
+        // 1line - chars=15, response_out='$12 = 8228421',
         let response = self.make_request_await_response(
             format!("print {variable_name}").as_str(), 
+            Some(1),
             Duration::from_millis(250)
         ).await?;
 
-        let first_line = response.first().expect("Response should contain at least one line");
-        let value = extract_variable_value_from_response_line(first_line).unwrap();
-        Ok(value)
+        let first_line = response.first().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Read missing result"))?;
+        extract_variable_value_from_response_line(first_line)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Read format corrupted"))
     }
 
 
     pub async fn break_at(&mut self, function_name: &str) -> Result<Vec<String>, io::Error> {
+        // 1 line: - chars=131, response_out='Breakpoint 1 at 0x8009bc8: file /workspaces/STM32U5_CMake_DevContainer_TouchGFX_Template/target/Core/Src/app_threadx.c, line 118.'
         self.make_request_await_response(
             format!("break {function_name}").as_str(), 
+            Some(1),
             Duration::from_millis(750)
         ).await
     }
 
     pub async fn monitor_sleep(&mut self, millis: u32) -> Result<Vec<String>, io::Error> {
+        // 1 line, "Sleep 250ms"
         self.make_request_await_response(
             format!("monitor sleep {millis}").as_str(), 
+            Some(1),
             Duration::from_millis(millis as u64 + 250)
         ).await
     }
@@ -211,37 +279,41 @@ impl Gdb {
     where 
         P: AsRef<Path>
     {
+        // 1 line - chars=106, response_out='Restoring binary file C:\WS\gdbloader\tmp_bin_chunks\chunk_0_.bin into memory (0x200b76a8 to 0x200c76a8)',
         let lines = self.make_request_await_response(
             format!(
                 "restore {} binary {}", 
                 binary_filepath.as_ref().to_str().unwrap(), 
                 ram_buffer_name
-        ).as_str(),
+            ).as_str(),
+            Some(1),
             Duration::from_millis(1000)
         ).await?;
 
-        let first_line = lines.first().expect("Response should contain at least one line");
-        let (from_address, to_address) = extract_adresses_from_response_line(first_line).expect("Line should contain from to adresses");
+        let first_line = lines.first().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Read missing result"))?;
+        let (from_address, to_address) = extract_adresses_from_response_line(first_line)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Corrupted result format"))?;
         let bytes_count = to_address - from_address;
         Ok(bytes_count)
     }
 
-    pub async fn read_binary_file_from_mem<P>(&mut self, start_address: u32, end_address: u32, result_filepath: P) -> Result<Vec<String>, io::Error> 
-    where 
-        P: AsRef<Path>
-    {
-        // gdb will create file
-        self.make_request_await_response(
-            format!(
-                "dump binary memory {} {:#x} {:#x}",
-                result_filepath.as_ref().to_str().unwrap(), 
-                start_address, 
-                end_address
-            )
-            .as_str(),
-            Duration::from_millis(1000)
-        ).await
-    }
+    // pub async fn read_binary_file_from_mem<P>(&mut self, start_address: u32, end_address: u32, result_filepath: P) -> Result<Vec<String>, io::Error> 
+    // where 
+    //     P: AsRef<Path>
+    // {
+    //     // gdb will create file
+    //     self.make_request_await_response(
+    //         format!(
+    //             "dump binary memory {} {:#x} {:#x}",
+    //             result_filepath.as_ref().to_str().unwrap(), 
+    //             start_address, 
+    //             end_address
+    //         )
+    //         .as_str(),
+    //         None, // TODO examin
+    //         Duration::from_millis(1000)
+    //     ).await
+    // }
 
 
 }
@@ -273,6 +345,17 @@ fn extract_variable_value_from_response_line(line: &str) -> Option<u32> {
     line.split(" ")
         .last()
         .and_then(|s| s.parse().ok())
+}
+
+fn extract_call_result(results: Vec<String>, has_return: bool) -> Result<String, io::Error> {
+    if !has_return {
+        Ok(String::new())
+    } else {
+        match results.first() {
+            Some(s) => Ok(s.to_owned()),
+            None => Err(io::Error::new(io::ErrorKind::InvalidData, "call with no output"))
+        }
+    }
 }
 
 // impl Drop for Gdb {
