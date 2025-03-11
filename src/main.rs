@@ -9,8 +9,8 @@ use loader::upload_binary_file_to_external_flash;
 // TODO replace with CLI params or config file
 const ELF_ABS_PATH: &str = "C:/WS/STM32U5_CMake_DevContainer_TouchGFX_Template/target/build/tmplatemkfileu5dk.elf";
 // arm-none-eabi-gdb -q C:/WS/STM32U5_CMake_DevContainer_TouchGFX_Template/target/build/tmplatemkfileu5dk.elf
-// const BIN_PATH: &str = "C:/WS/gdbloader/res/testfiles/images.bin";
-const BIN_PATH: &str = "C:/WS/gdbloader/res/testfiles/big_images.bin";
+const BIN_PATH: &str = "C:/WS/gdbloader/res/testfiles/images.bin";
+// const BIN_PATH: &str = "C:/WS/gdbloader/res/testfiles/big_images.bin";
 const GDB_EXEC: &str = "arm-none-eabi-gdb";
 const GDB_SERVER: &str = "localhost:61234"; //"host.docker.internal:61234"
 // target remote localhost:61234
@@ -43,7 +43,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "loader_ram_buffer", 
         64 * 1024, 
         0x0, 
-        "loader_checksum",
         "loader_copy_to_ext_flash"
     ).await?;
 
@@ -52,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         gdb.monitor_sleep(250).await?;
     }
  
-    gdb.quit().await?; // TODO implement drop
+    gdb.quit_and_wait().await?; // TODO implement drop
 
     Ok(())
 }
