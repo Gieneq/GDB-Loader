@@ -22,7 +22,12 @@ cargo install --path .
 ```
 
 ## Usage
-ClI being introduced
+
+Basic example with default parameters:
+```sh
+cargo run -- -b C:/WS/gdbloader/res/testfiles/images.bin -g arm-none-eabi-gdb -e C:/WS/STM32U5_CMake_DevContainer_TouchGFX_Template/target/build/tmplatemkfileu5dk.elf
+```
+It will trasnfer binary to default RAM adress with default functions API with chunk size of 64KiB.
 
 
 ## License

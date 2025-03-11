@@ -29,11 +29,10 @@ impl Gdb {
     /// - `server`: The remote server address to connect to.
     ///
     /// # Process Flow
-    /// 1. Initializes the logger.
-    /// 2. Spawns the GDB process with piped stdin, stdout, and stderr.
-    /// 3. Sends the command `"set confirm off"` (no expected response).
-    /// 4. Clears any pending responses.
-    /// 5. Connects to the remote server with `"target remote {server}"` (response may take time).
+    /// 1. Spawns the GDB process with piped stdin, stdout, and stderr.
+    /// 2. Sends the command `"set confirm off"` (no expected response).
+    /// 3. Clears any pending responses.
+    /// 4. Connects to the remote server with `"target remote {server}"` (response may take time).
     ///
     /// # Returns
     /// Returns an instance of `Gdb` on success.
@@ -42,14 +41,6 @@ impl Gdb {
         target_elf_path: PathBuf,
         server: String,
     ) -> Result<Self, io::Error> {
-        env_logger::builder()
-            .filter_level(log::LevelFilter::Debug)
-            .format_timestamp_millis()
-            .format_file(true)
-            .format_file(true)
-            .format_line_number(true)
-            .init();
-
         log::info!("Creating GDB");
 
         let mut gdb_subcommand = Command::new(executive_path)
@@ -320,6 +311,7 @@ impl Gdb {
     ///
     /// # Returns
     /// A `Result` containing the function output or an `io::Error`.
+    #[allow(unused)]
     pub async fn call(&mut self, function_name: &str, has_return: bool) -> Result<String, io::Error> {
         self.call_generic(format!("{function_name}()").as_str(), has_return).await
     }

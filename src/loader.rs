@@ -1,6 +1,8 @@
 use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use tokio::io;
 use tokio::fs;
@@ -91,21 +93,24 @@ async fn save_chunk_tmp_file(
 /// # Returns
 /// - `Ok(())` if the upload is successful and all checksums match.
 /// - `Err(io::Error)` if an I/O error occurs or if a checksum mismatch is detected.
-pub async fn upload_binary_file_to_external_flash<P>(
+pub async fn upload_binary_file_to_external_flash<P, F>(
     gdb: &mut Gdb,
     binary_filepath: P,
     ram_buffer_name: &str,
     chunk_size: usize,
     flash_start_offset: usize,
     coping_function_name: &str,
+    per_chunk_handler: Option<F>
 ) -> io::Result<()> 
 where
-    P: AsRef<Path> + Debug
+    P: AsRef<Path> + Debug,
+    F: Fn(usize, usize, usize, usize, u128) + 'static
 {
     let file_data = fs::read(&binary_filepath).await?;
-    let chunks_count = (file_data.len() / chunk_size) + if file_data.len() % chunk_size != 0 { 1 } else { 0 };
+    let total_data_size = file_data.len();
+    let chunks_count = (total_data_size / chunk_size) + if total_data_size % chunk_size != 0 { 1 } else { 0 };
     log::info!("Loaded file {:?}, got {} B. Packets to upload: {} up to {} B each.", 
-        binary_filepath, file_data.len(), chunks_count, chunk_size
+        binary_filepath, total_data_size, chunks_count, chunk_size
     );
 
     // Create or recreate temp files directory
@@ -113,10 +118,13 @@ where
     // via GDB to target MCU RAM buffer.
     prepare_tmp_workspace_dir().await?;
 
-    let mut remaining_bytes = file_data.len();
+    let mut remaining_bytes = total_data_size;
     let mut data_offset = 0;
     let mut chunk_idx: usize = 0;
     let mut flash_offset: usize = flash_start_offset;
+    let mut bytes_trasfered = 0;
+
+    let system_time_start = SystemTime::now();
 
     while remaining_bytes > 0 {
         // Determine the number of bytes for the current chunk.
@@ -159,6 +167,18 @@ where
                 io::ErrorKind::InvalidData, 
                 format!("Checksum not match host={data_slice_checksum} target={target_checksum}")
             ));
+        }
+
+        bytes_trasfered += chunk_bytes;
+        if let Some(chunk_handle) = per_chunk_handler.as_ref() {
+            let time_since_start = system_time_start.duration_since(UNIX_EPOCH).expect("Time went backwards");
+            chunk_handle(
+                chunk_idx, 
+                chunks_count, 
+                bytes_trasfered,
+                total_data_size,
+                time_since_start.as_millis()
+            )
         }
 
         // Update indices and offsets for the next iteration.

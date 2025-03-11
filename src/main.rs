@@ -2,35 +2,113 @@ mod gdb;
 mod loader;
 
 use std::path::PathBuf;
+use clap::Parser;
+use tokio::io;
 
 use gdb::Gdb;
 use loader::upload_binary_file_to_external_flash;
 
-// TODO replace with CLI params or config file
-const ELF_ABS_PATH: &str = "C:/WS/STM32U5_CMake_DevContainer_TouchGFX_Template/target/build/tmplatemkfileu5dk.elf";
-// arm-none-eabi-gdb -q C:/WS/STM32U5_CMake_DevContainer_TouchGFX_Template/target/build/tmplatemkfileu5dk.elf
-const BIN_PATH: &str = "C:/WS/gdbloader/res/testfiles/images.bin";
-// const BIN_PATH: &str = "C:/WS/gdbloader/res/testfiles/big_images.bin";
-const GDB_EXEC: &str = "arm-none-eabi-gdb";
-const GDB_SERVER: &str = "localhost:61234"; //"host.docker.internal:61234"
-// target remote localhost:61234
-// restore C:/WS/gdbloader/res/testfiles/images.bin binary loader_ram_buffer
-// restore C:/WS/gdbloader/res/testfiles/images.bin binary &loader_ram_buffer
+// // TODO replace with CLI params or config file
+// const ELF_ABS_PATH: &str = "C:/WS/STM32U5_CMake_DevContainer_TouchGFX_Template/target/build/tmplatemkfileu5dk.elf";
+// // arm-none-eabi-gdb -q C:/WS/STM32U5_CMake_DevContainer_TouchGFX_Template/target/build/tmplatemkfileu5dk.elf
+// const BIN_PATH: &str = "C:/WS/gdbloader/res/testfiles/images.bin";
+// // const BIN_PATH: &str = "C:/WS/gdbloader/res/testfiles/big_images.bin";
+// const GDB_EXEC: &str = "arm-none-eabi-gdb";
+// const GDB_SERVER: &str = "localhost:61234"; //"host.docker.internal:61234"
+// // target remote localhost:61234
+// // restore C:/WS/gdbloader/res/testfiles/images.bin binary loader_ram_buffer
+// // restore C:/WS/gdbloader/res/testfiles/images.bin binary &loader_ram_buffer
 // restore C:/WS/gdbloader/res/testfiles/images.bin binary 0x200b76a8
+
+//cargo run -- -d true -b C:/WS/gdbloader/res/testfiles/images.bin -g arm-none-eabi-gdb -e C:/WS/STM32U5_CMake_DevContainer_TouchGFX_Template/target/build/tmplatemkfileu5dk.elf
+
+#[derive(Debug, Parser)]
+#[command(version, about = "Image dithering and palette extraction tool", long_about = None)]
+struct Cli {
+    /// Input binary file path (required).
+    #[arg(short = 'b', long = "binary", value_name = "BINARY_PATH", required = true)]
+    binary_path: PathBuf,
+    
+    /// arm-none-eabi-gdb executive path (required).
+    #[arg(short = 'g', long = "gdb", value_name = "GDB_PATH", required = true)]
+    gdb_path: PathBuf,
+    
+    /// Firmware elf file path (required).
+    #[arg(short = 'e', long = "elf", value_name = "ELF_PATH", required = true)]
+    elf_path: PathBuf,
+
+    /// Name of target function at which program should break before uploading.
+    #[arg(short = 'B', long = "break", value_name = "BREAK_FUN", default_value_t = String::from("MX_ThreadX_Init"))]
+    break_function_name: String,
+
+    /// Target RAM buffer name.
+    #[arg(short = 'r', long = "rambuf", value_name = "RAM_BUFFER", default_value_t = String::from("loader_ram_buffer"))]
+    ram_buffer_name: String,
+
+    /// Target copy function name.
+    #[arg(short = 'c', long = "copy", value_name = "COPY_FUN", default_value_t = String::from("loader_copy_to_ext_flash"))]
+    copy_function_name: String,
+
+    /// GDB server address.
+    #[arg(short = 's', long = "server", value_name = "SERVER-ADDRESS", default_value_t = String::from("localhost:61234"))]
+    server_address: String,
+
+    /// Chunk size, should be multiple of FLASH memory unit size.
+    #[arg(short = 'C', long = "chunk", value_name = "CHUNK_SIZE", default_value_t = 64 * 1024)]
+    chunk_size_bytes: usize,
+
+    /// Offset at which saving will start, should be multiple of FLASH memory unit size.
+    #[arg(short = 'o', long = "offset", value_name = "FLASH_OFFSET", default_value_t = 0x0)]
+    flash_save_offset: usize,
+    
+    /// Additional information about execution process (optional)
+    #[arg(short = 'd', long = "debug", value_name = "DEBUG_ENABLED", default_value_t = false)]
+    debug: bool  
+}
+
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut gdb = Gdb::try_new(
-        PathBuf::from(GDB_EXEC), 
-        PathBuf::from(ELF_ABS_PATH), 
-        GDB_SERVER.to_string()
-    ).await?;
+    let cli_args = Cli::parse();
+    
+    if cli_args.debug {
+        env_logger::builder()
+            .filter_level(log::LevelFilter::Debug)
+            .format_timestamp_millis()
+            .format_file(true)
+            .format_file(true)
+            .format_line_number(true)
+            .init();
+    }
 
-    // gdb.help().await?;
+    log::debug!("Got args: '{:?}'.", cli_args);
+
+    run_procedure(cli_args)
+        .await
+        .map_err(|e| e.into())
+}
+
+fn per_chunk_handler(
+    chunk_idx: usize, 
+    chunks_total_count: usize, 
+    processed_data: usize,
+    total_data: usize,
+    millis_since_start: u128
+) {
+    let chunks_done = chunk_idx + 1;
+    println!("{millis_since_start} ms, chunk={chunks_done}/{chunks_total_count}, bytes={processed_data}/{total_data}B;")
+}
+
+async fn run_procedure(cli_args: Cli) -> io::Result<()> {
+    let mut gdb = Gdb::try_new(
+        cli_args.gdb_path, 
+        cli_args.elf_path, 
+        cli_args.server_address
+    ).await?;
 
     gdb.monitor_reset().await?;
 
-    gdb.break_at("MX_ThreadX_Init").await?;
+    gdb.break_at(&cli_args.break_function_name).await?;
 
     gdb.continue_execution().await?;
 
@@ -39,17 +117,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Chunk size should match bock size
     upload_binary_file_to_external_flash(
         &mut gdb,
-        BIN_PATH, 
-        "loader_ram_buffer", 
-        64 * 1024, 
-        0x0, 
-        "loader_copy_to_ext_flash"
+        cli_args.binary_path, 
+        &cli_args.ram_buffer_name, 
+        cli_args.chunk_size_bytes, 
+        cli_args.flash_save_offset, 
+        &cli_args.copy_function_name,
+        Some(per_chunk_handler)
     ).await?;
 
-    for _ in 0..3 {
-        gdb.call("green_togl", false).await?;
-        gdb.monitor_sleep(250).await?;
-    }
+    gdb.monitor_sleep(250).await?;
  
     gdb.quit_and_wait().await?; // TODO implement drop
 
