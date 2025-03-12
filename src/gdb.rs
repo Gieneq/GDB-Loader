@@ -256,7 +256,7 @@ impl Gdb {
         self.make_request_await_response(
             "continue", 
             None,
-            Duration::from_millis(750)
+            Duration::from_millis(5000)
         ).await
     }
 
@@ -291,7 +291,7 @@ impl Gdb {
         let results = self.make_request_await_response(
             format!("call {function}").as_str(), 
             if has_return { Some(1) } else { None },
-            Duration::from_millis(250)
+            Duration::from_millis(2250)
         )
         .await?;
 
@@ -472,7 +472,7 @@ impl Gdb {
                 ram_buffer_name
             ).as_str(),
             Some(1),
-            Duration::from_millis(1000)
+            Duration::from_millis(5000)
         ).await?;
 
         let first_line = lines.first().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Read missing result"))?;

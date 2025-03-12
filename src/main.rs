@@ -1,26 +1,12 @@
 mod gdb;
 mod loader;
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 use clap::Parser;
 use tokio::io;
 
 use gdb::Gdb;
 use loader::upload_binary_file_to_external_flash;
-
-// // TODO replace with CLI params or config file
-// const ELF_ABS_PATH: &str = "C:/WS/STM32U5_CMake_DevContainer_TouchGFX_Template/target/build/tmplatemkfileu5dk.elf";
-// // arm-none-eabi-gdb -q C:/WS/STM32U5_CMake_DevContainer_TouchGFX_Template/target/build/tmplatemkfileu5dk.elf
-// const BIN_PATH: &str = "C:/WS/gdbloader/res/testfiles/images.bin";
-// // const BIN_PATH: &str = "C:/WS/gdbloader/res/testfiles/big_images.bin";
-// const GDB_EXEC: &str = "arm-none-eabi-gdb";
-// const GDB_SERVER: &str = "localhost:61234"; //"host.docker.internal:61234"
-// // target remote localhost:61234
-// // restore C:/WS/gdbloader/res/testfiles/images.bin binary loader_ram_buffer
-// // restore C:/WS/gdbloader/res/testfiles/images.bin binary &loader_ram_buffer
-// restore C:/WS/gdbloader/res/testfiles/images.bin binary 0x200b76a8
-
-//cargo run -- -d true -b C:/WS/gdbloader/res/testfiles/images.bin -g arm-none-eabi-gdb -e C:/WS/STM32U5_CMake_DevContainer_TouchGFX_Template/target/build/tmplatemkfileu5dk.elf
 
 #[derive(Debug, Parser)]
 #[command(version, about = "Image dithering and palette extraction tool", long_about = None)]
@@ -110,9 +96,15 @@ async fn run_procedure(cli_args: Cli) -> io::Result<()> {
 
     gdb.break_at(&cli_args.break_function_name).await?;
 
+    // tokio::time::sleep(Duration::from_secs(1)).await;
+
     gdb.continue_execution().await?;
 
+    // tokio::time::sleep(Duration::from_secs(1)).await;
+
     gdb.monitor_halt().await?;
+
+    // tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Chunk size should match bock size
     upload_binary_file_to_external_flash(
