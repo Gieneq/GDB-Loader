@@ -1,7 +1,7 @@
 mod gdb;
 mod loader;
 
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
 use clap::Parser;
 use tokio::io;
 
@@ -24,7 +24,7 @@ struct Cli {
     elf_path: PathBuf,
 
     /// Name of target function at which program should break before uploading.
-    #[arg(short = 'B', long = "break", value_name = "BREAK_FUN", default_value_t = String::from("MX_ThreadX_Init"))]
+    #[arg(short = 'B', long = "break", value_name = "BREAK_FUN", default_value_t = String::from("Loader_Breakpoint"))]
     break_function_name: String,
 
     /// Target RAM buffer name.

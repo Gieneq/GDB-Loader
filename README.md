@@ -2,6 +2,12 @@
 
 GdbLoader is a command-line tool designed to upload binary files to external flash memory on ARM embedded systems via GDB.
 
+Example ~6MiB MJPEG video uploaded to STM32U5G-DK2 ([project](https://github.com/Gieneq/STM32U5_CMake_DevContainer_TouchGFX_Template)) using GDB loader.
+
+<p align="center">
+  <img width="500" alt="Uploaded video files to external NOR FLASH" src="res/uploaded_example.gif">
+</p>
+
 ## Features
 - Asynchronous Operations: Utilizes Tokio for efficient, non-blocking I/O.
 - Chunked Binary Transfer: Splits binary files into configurable chunks.
